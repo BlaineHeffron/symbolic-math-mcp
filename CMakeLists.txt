@@ -45,9 +45,14 @@ if(NOT SYMENGINE_FOUND)
         ${symengine_SOURCE_DIR}
         ${symengine_BINARY_DIR}
     )
-    # GMP headers must be visible to code that includes SymEngine headers
+    # GMP/Boost headers must be visible to code that includes SymEngine headers
     if(GMP_HEADER_DIR)
         list(APPEND SYMENGINE_INCLUDE_DIRS ${GMP_HEADER_DIR})
+    else()
+        find_package(Boost QUIET)
+        if(Boost_FOUND)
+            list(APPEND SYMENGINE_INCLUDE_DIRS ${Boost_INCLUDE_DIRS})
+        endif()
     endif()
     set(SYMENGINE_LIBRARIES symengine)
 endif()
