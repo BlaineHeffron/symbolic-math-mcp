@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # SymEngine v0.13 uses cmake_minimum_required < 3.5, rejected by CMake 3.31+
+  SYMENGINE_CMAKE_COMPAT: -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
 jobs:
   build:
     name: Build ${{ matrix.name }}
@@ -41,7 +45,7 @@ jobs:
       - name: Build (Linux x86_64)
         if: matrix.name == 'linux-x86_64'
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release $SYMENGINE_CMAKE_COMPAT
           cmake --build build --config Release
 
       - name: Test (Linux x86_64)
@@ -53,23 +57,24 @@ jobs:
         if: matrix.cross_arch == 'aarch64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libgmp-dev
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libboost-dev
 
       - name: Build (Linux aarch64)
         if: matrix.cross_arch == 'aarch64'
         run: |
-          cat > toolchain-aarch64.cmake << 'EOF'
+          cat > toolchain-aarch64.cmake << 'TOOLCHAIN'
           set(CMAKE_SYSTEM_NAME Linux)
           set(CMAKE_SYSTEM_PROCESSOR aarch64)
           set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
           set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
           set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
           set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-          EOF
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE BOTH)
+          TOOLCHAIN
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE=toolchain-aarch64.cmake \
-            -DSYMBOLIC_MATH_BUILD_TESTS=OFF
+            -DSYMBOLIC_MATH_BUILD_TESTS=OFF \
+            $SYMENGINE_CMAKE_COMPAT
           cmake --build build --config Release
 
       # --- macOS universal ---
@@ -79,17 +84,17 @@ jobs:
 
       - name: Build (macOS universal)
         if: matrix.name == 'macos-universal'
+        env:
+          GMP_PREFIX: /opt/homebrew/opt/gmp
         run: |
+          CMAKE_COMMON="-DCMAKE_BUILD_TYPE=Release -DSYMBOLIC_MATH_BUILD_TESTS=OFF $SYMENGINE_CMAKE_COMPAT -DCMAKE_PREFIX_PATH=$GMP_PREFIX"
+
           # Build arm64
-          cmake -B build-arm64 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DSYMBOLIC_MATH_BUILD_TESTS=OFF
+          cmake -B build-arm64 $CMAKE_COMMON -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build build-arm64 --config Release
 
           # Build x86_64
-          cmake -B build-x86_64 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
-            -DSYMBOLIC_MATH_BUILD_TESTS=OFF
+          cmake -B build-x86_64 $CMAKE_COMMON -DCMAKE_OSX_ARCHITECTURES=x86_64
           cmake --build build-x86_64 --config Release
 
           # Combine with lipo
@@ -101,16 +106,25 @@ jobs:
 
       - name: Test (macOS arm64)
         if: matrix.name == 'macos-universal'
+        env:
+          GMP_PREFIX: /opt/homebrew/opt/gmp
         run: |
-          cmake -B build-test -DCMAKE_BUILD_TYPE=Release
+          cmake -B build-test -DCMAKE_BUILD_TYPE=Release $SYMENGINE_CMAKE_COMPAT -DCMAKE_PREFIX_PATH=$GMP_PREFIX
           cmake --build build-test --config Release
           cd build-test && ctest --output-on-failure
 
       # --- Windows ---
       - name: Build (Windows)
         if: matrix.name == 'windows-x86_64'
+        shell: bash
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          # Find pre-installed Boost on the runner
+          BOOST_DIR=$(ls -d /c/local/boost_* 2>/dev/null | head -1)
+          BOOST_FLAG=""
+          if [ -n "$BOOST_DIR" ]; then
+            BOOST_FLAG="-DBOOST_ROOT=$BOOST_DIR"
+          fi
+          cmake -B build -DCMAKE_BUILD_TYPE=Release $SYMENGINE_CMAKE_COMPAT $BOOST_FLAG
           cmake --build build --config Release
 
       - name: Test (Windows)
@@ -120,12 +134,7 @@ jobs:
       # --- Package ---
       - name: Package (Unix)
         if: runner.os != 'Windows'
-        run: |
-          BIN=build/symbolic-math-mcp
-          if [ "${{ matrix.cross_arch }}" = "aarch64" ]; then
-            BIN=build/symbolic-math-mcp
-          fi
-          tar czf ${{ matrix.artifact }} -C $(dirname $BIN) $(basename $BIN)
+        run: tar czf ${{ matrix.artifact }} -C build symbolic-math-mcp
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
