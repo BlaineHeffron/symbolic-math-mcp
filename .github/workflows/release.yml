@@ -27,9 +27,9 @@ jobs:
             os: ubuntu-22.04
             artifact: symbolic-math-mcp-linux-aarch64.tar.gz
             cross_arch: aarch64
-          - name: macos-universal
+          - name: macos-arm64
             os: macos-14
-            artifact: symbolic-math-mcp-macos-universal.tar.gz
+            artifact: symbolic-math-mcp-macos-arm64.tar.gz
           - name: windows-x86_64
             os: windows-latest
             artifact: symbolic-math-mcp-windows-x86_64.zip
@@ -77,54 +77,39 @@ jobs:
             $SYMENGINE_CMAKE_COMPAT
           cmake --build build --config Release
 
-      # --- macOS universal ---
+      # --- macOS arm64 ---
       - name: Install GMP (macOS)
-        if: matrix.name == 'macos-universal'
+        if: matrix.name == 'macos-arm64'
         run: brew install gmp
 
-      - name: Build (macOS universal)
-        if: matrix.name == 'macos-universal'
-        env:
-          GMP_PREFIX: /opt/homebrew/opt/gmp
+      - name: Build (macOS arm64)
+        if: matrix.name == 'macos-arm64'
         run: |
-          CMAKE_COMMON="-DCMAKE_BUILD_TYPE=Release -DSYMBOLIC_MATH_BUILD_TESTS=OFF $SYMENGINE_CMAKE_COMPAT -DCMAKE_PREFIX_PATH=$GMP_PREFIX"
-
-          # Build arm64
-          cmake -B build-arm64 $CMAKE_COMMON -DCMAKE_OSX_ARCHITECTURES=arm64
-          cmake --build build-arm64 --config Release
-
-          # Build x86_64
-          cmake -B build-x86_64 $CMAKE_COMMON -DCMAKE_OSX_ARCHITECTURES=x86_64
-          cmake --build build-x86_64 --config Release
-
-          # Combine with lipo
-          mkdir -p build
-          lipo -create \
-            build-arm64/symbolic-math-mcp \
-            build-x86_64/symbolic-math-mcp \
-            -output build/symbolic-math-mcp
+          GMP_PREFIX=$(brew --prefix gmp)
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            $SYMENGINE_CMAKE_COMPAT \
+            -DCMAKE_PREFIX_PATH="$GMP_PREFIX" \
+            -DGMP_INCLUDE_DIR="$GMP_PREFIX/include" \
+            -DGMP_LIBRARY="$GMP_PREFIX/lib/libgmp.dylib"
+          cmake --build build --config Release
 
       - name: Test (macOS arm64)
-        if: matrix.name == 'macos-universal'
-        env:
-          GMP_PREFIX: /opt/homebrew/opt/gmp
-        run: |
-          cmake -B build-test -DCMAKE_BUILD_TYPE=Release $SYMENGINE_CMAKE_COMPAT -DCMAKE_PREFIX_PATH=$GMP_PREFIX
-          cmake --build build-test --config Release
-          cd build-test && ctest --output-on-failure
+        if: matrix.name == 'macos-arm64'
+        run: cd build && ctest --output-on-failure
 
       # --- Windows ---
+      - name: Install Boost (Windows)
+        if: matrix.name == 'windows-x86_64'
+        shell: pwsh
+        run: choco install boost-msvc-14.3 -y
+
       - name: Build (Windows)
         if: matrix.name == 'windows-x86_64'
-        shell: bash
+        shell: pwsh
         run: |
-          # Find pre-installed Boost on the runner
-          BOOST_DIR=$(ls -d /c/local/boost_* 2>/dev/null | head -1)
-          BOOST_FLAG=""
-          if [ -n "$BOOST_DIR" ]; then
-            BOOST_FLAG="-DBOOST_ROOT=$BOOST_DIR"
-          fi
-          cmake -B build -DCMAKE_BUILD_TYPE=Release $SYMENGINE_CMAKE_COMPAT $BOOST_FLAG
+          $boostDir = (Get-ChildItem -Directory "C:\local\boost_*" -ErrorAction SilentlyContinue | Select-Object -First 1)
+          $boostFlag = if ($boostDir) { "-DBOOST_ROOT=$($boostDir.FullName)" } else { "" }
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 $boostFlag
           cmake --build build --config Release
 
       - name: Test (Windows)
