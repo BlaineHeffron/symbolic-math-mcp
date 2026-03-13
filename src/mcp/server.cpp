@@ -7,10 +7,72 @@
 #include "engine/output.h"
 #include "physics/physics.h"
 #include "tensors/tensors.h"
+#include <algorithm>
+#include <cctype>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
 namespace mcp {
+
+namespace {
+
+std::string trim(std::string s) {
+    auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
+    s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
+    return s;
+}
+
+std::optional<json> read_message(std::istream& in) {
+    std::string first_line;
+    if (!std::getline(in, first_line)) {
+        return std::nullopt;
+    }
+    if (!first_line.empty() && first_line.back() == '\r') {
+        first_line.pop_back();
+    }
+    if (first_line.empty()) {
+        return std::nullopt;
+    }
+
+    // Support both proper MCP stdio framing and newline-delimited JSON for manual probes.
+    if (first_line.rfind("Content-Length:", 0) != 0) {
+        return json::parse(first_line);
+    }
+
+    auto len_str = trim(first_line.substr(std::string("Content-Length:").size()));
+    std::size_t content_length = std::stoul(len_str);
+
+    std::string header_line;
+    while (std::getline(in, header_line)) {
+        if (!header_line.empty() && header_line.back() == '\r') {
+            header_line.pop_back();
+        }
+        if (header_line.empty()) {
+            break;
+        }
+    }
+
+    std::string payload(content_length, '\0');
+    in.read(payload.data(), static_cast<std::streamsize>(content_length));
+    if (static_cast<std::size_t>(in.gcount()) != content_length) {
+        throw std::runtime_error("Incomplete MCP payload");
+    }
+    return json::parse(payload);
+}
+
+void write_message(std::ostream& out, const json& response) {
+    if (response.is_null()) {
+        return;
+    }
+
+    std::string body = response.dump();
+    out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    out.flush();
+}
+
+} // namespace
 
 Server::Server(const std::string& name, const std::string& version)
     : name_(name), version_(version) {}
@@ -21,22 +83,21 @@ void Server::register_tool(ToolDefinition def, ToolHandler handler) {
 }
 
 void Server::run(std::istream& in, std::ostream& out) {
-    std::string line;
-    while (std::getline(in, line)) {
-        if (line.empty()) continue;
-
+    while (true) {
         json response;
         try {
-            json request = json::parse(line);
-            response = handle_request(request);
+            auto request = read_message(in);
+            if (!request.has_value()) {
+                break;
+            }
+            response = handle_request(*request);
         } catch (json::parse_error& e) {
             response = make_error(nullptr, PARSE_ERROR, "Parse error");
         } catch (std::exception& e) {
             response = make_error(nullptr, INTERNAL_ERROR, e.what());
         }
 
-        out << response.dump() << "\n";
-        out.flush();
+        write_message(out, response);
     }
 }
 
@@ -78,8 +139,8 @@ json Server::handle_initialize(const json& id, const json& params) {
 }
 
 json Server::handle_initialized(const json& id) {
-    // Notification, no response needed per MCP spec, but we respond for compatibility
-    return make_response(id, json::object());
+    (void)id;
+    return json();
 }
 
 json Server::handle_tools_list(const json& id, const json& params) {

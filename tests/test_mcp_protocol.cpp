@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "mcp/server.h"
 #include "mcp/protocol.h"
+#include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include <sstream>
 
@@ -56,6 +58,46 @@ TEST_F(McpServerTest, ToolsList) {
     EXPECT_TRUE(response.contains("result"));
     auto tools = response["result"]["tools"];
     EXPECT_EQ(tools.size(), 21u);
+}
+
+TEST_F(McpServerTest, FramedRunInitializeAndToolsList) {
+    auto frame = [](const json& message) {
+        std::string body = message.dump();
+        return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+    };
+
+    std::stringstream in;
+    std::stringstream out;
+    in << frame({
+        {"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "initialize"},
+        {"params", {
+            {"protocolVersion", "2024-11-05"},
+            {"capabilities", json::object()},
+            {"clientInfo", {{"name", "test"}, {"version", "1.0"}}},
+        }},
+    });
+    in << frame({
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/initialized"},
+        {"params", json::object()},
+    });
+    in << frame({
+        {"jsonrpc", "2.0"},
+        {"id", 2},
+        {"method", "tools/list"},
+        {"params", json::object()},
+    });
+
+    server.run(in, out);
+
+    std::string output = out.str();
+    ASSERT_FALSE(output.empty());
+    EXPECT_EQ(output.find("\"id\":null"), std::string::npos);
+    EXPECT_NE(output.find("\"id\":1"), std::string::npos);
+    EXPECT_NE(output.find("\"id\":2"), std::string::npos);
+    EXPECT_NE(output.find("\"tools\""), std::string::npos);
 }
 
 TEST_F(McpServerTest, ToolsCallSimplify) {
