@@ -17,6 +17,11 @@ namespace mcp {
 
 namespace {
 
+struct DecodedMessage {
+    json payload;
+    bool framed;
+};
+
 std::string trim(std::string s) {
     auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
@@ -24,7 +29,7 @@ std::string trim(std::string s) {
     return s;
 }
 
-std::optional<json> read_message(std::istream& in) {
+std::optional<DecodedMessage> read_message(std::istream& in) {
     std::string first_line;
     if (!std::getline(in, first_line)) {
         return std::nullopt;
@@ -38,7 +43,7 @@ std::optional<json> read_message(std::istream& in) {
 
     // Support both proper MCP stdio framing and newline-delimited JSON for manual probes.
     if (first_line.rfind("Content-Length:", 0) != 0) {
-        return json::parse(first_line);
+        return DecodedMessage{json::parse(first_line), false};
     }
 
     auto len_str = trim(first_line.substr(std::string("Content-Length:").size()));
@@ -59,16 +64,20 @@ std::optional<json> read_message(std::istream& in) {
     if (static_cast<std::size_t>(in.gcount()) != content_length) {
         throw std::runtime_error("Incomplete MCP payload");
     }
-    return json::parse(payload);
+    return DecodedMessage{json::parse(payload), true};
 }
 
-void write_message(std::ostream& out, const json& response) {
+void write_message(std::ostream& out, const json& response, bool framed) {
     if (response.is_null()) {
         return;
     }
 
     std::string body = response.dump();
-    out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    if (framed) {
+        out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    } else {
+        out << body << '\n';
+    }
     out.flush();
 }
 
@@ -85,19 +94,21 @@ void Server::register_tool(ToolDefinition def, ToolHandler handler) {
 void Server::run(std::istream& in, std::ostream& out) {
     while (true) {
         json response;
+        bool framed = true;
         try {
             auto request = read_message(in);
             if (!request.has_value()) {
                 break;
             }
-            response = handle_request(*request);
+            framed = request->framed;
+            response = handle_request(request->payload);
         } catch (json::parse_error& e) {
             response = make_error(nullptr, PARSE_ERROR, "Parse error");
         } catch (std::exception& e) {
             response = make_error(nullptr, INTERNAL_ERROR, e.what());
         }
 
-        write_message(out, response);
+        write_message(out, response, framed);
     }
 }
 

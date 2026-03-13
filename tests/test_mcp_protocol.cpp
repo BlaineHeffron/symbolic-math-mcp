@@ -100,6 +100,41 @@ TEST_F(McpServerTest, FramedRunInitializeAndToolsList) {
     EXPECT_NE(output.find("\"tools\""), std::string::npos);
 }
 
+TEST_F(McpServerTest, NewlineDelimitedRunInitializeAndToolsList) {
+    std::stringstream in;
+    std::stringstream out;
+    in << json({
+        {"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "initialize"},
+        {"params", {
+            {"protocolVersion", "2025-06-18"},
+            {"capabilities", json::object()},
+            {"clientInfo", {{"name", "codex-mcp-client"}, {"version", "0.114.0"}}},
+        }},
+    }).dump() << '\n';
+    in << json({
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/initialized"},
+        {"params", json::object()},
+    }).dump() << '\n';
+    in << json({
+        {"jsonrpc", "2.0"},
+        {"id", 2},
+        {"method", "tools/list"},
+        {"params", json::object()},
+    }).dump() << '\n';
+
+    server.run(in, out);
+
+    std::string output = out.str();
+    ASSERT_FALSE(output.empty());
+    EXPECT_EQ(output.find("Content-Length:"), std::string::npos);
+    EXPECT_NE(output.find("\"id\":1"), std::string::npos);
+    EXPECT_NE(output.find("\"id\":2"), std::string::npos);
+    EXPECT_NE(output.find("\"tools\""), std::string::npos);
+}
+
 TEST_F(McpServerTest, ToolsCallSimplify) {
     json request = {
         {"jsonrpc", "2.0"},
