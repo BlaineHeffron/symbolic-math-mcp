@@ -86,13 +86,15 @@ Add to your Claude Desktop or Claude Code MCP config:
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `christoffel` | Christoffel symbols of the second kind | `metric`, `coordinates` |
-| `riemann_tensor` | Riemann curvature tensor | `metric`, `coordinates` |
-| `ricci_tensor` | Ricci tensor | `metric`, `coordinates` |
+| `christoffel` | Christoffel symbols of the second kind | `metric`, `coordinates`, `result_format` |
+| `riemann_tensor` | Riemann curvature tensor | `metric`, `coordinates`, `result_format` |
+| `ricci_tensor` | Ricci tensor | `metric`, `coordinates`, `result_format` |
 | `ricci_scalar` | Ricci scalar curvature | `metric`, `coordinates` |
-| `einstein_tensor` | Einstein tensor | `metric`, `coordinates` |
+| `einstein_tensor` | Einstein tensor | `metric`, `coordinates`, `result_format` |
 | `covariant_derivative` | Covariant derivative of a scalar | `expression`, `metric`, `coordinates`, `direction` |
 | `evaluate_component` | Evaluate a tensor component numerically | `expression`, `substitutions` |
+
+`christoffel`, `riemann_tensor`, `ricci_tensor`, and `einstein_tensor` also support `result_format: "structured"` for machine-oriented output. This mode returns stable integer indices and optional `dense_matrix` fields for rank-2 tensors, which is the preferred integration format for downstream adapters.
 
 ## Examples
 
@@ -147,6 +149,51 @@ riemann_tensor(
 )
 → "Riemann tensor is identically zero (flat space)"
 ```
+
+Structured tensor output for adapters:
+
+```json
+christoffel(
+  metric=[["-(1-2*M/r)", "0"], ["0", "1/(1-2*M/r)"]],
+  coordinates=["t", "r"],
+  result_format="structured"
+)
+→ {
+  "type": "christoffel_symbols",
+  "result_format": "structured",
+  "rank": 3,
+  "dimensions": 2,
+  "coordinates": ["t", "r"],
+  "zero": false,
+  "components": [
+    {
+      "indices": [0, 0, 1],
+      "index_names": ["t", "t", "r"],
+      "variance": "udd",
+      "value": "M/(r**2*(1 - 2*M/r))",
+      "latex": "..."
+    }
+  ]
+}
+```
+
+Complex substitutions are also accepted anywhere expressions are parsed:
+
+```json
+evaluate_component(
+  expression="x + y",
+  substitutions={"x": "3+2*I", "y": "1-I"}
+)
+→ {
+  "result": "4 + I",
+  "latex": "4 + j",
+  "type": "expression"
+}
+```
+
+## Integration Notes
+
+The current symbolic-math ↔ octophysics integration status is tracked in [docs/octophysics-handoff.md](/home/blaine/projects/ResearchTools/symbolic-math/docs/octophysics-handoff.md). That note records the completed Phase 1 work on this side and the expected resume point after octophysics Phase 2 is finished.
 
 ## Project Structure
 

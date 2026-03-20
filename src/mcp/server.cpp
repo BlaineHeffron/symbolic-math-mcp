@@ -458,6 +458,14 @@ void register_all_tools(Server& server) {
 
     // === Physics operations (7 tools) ===
 
+    // result_format property shared by GR tensor tools
+    json result_format_prop = {
+        {"type", "string"},
+        {"description", "Output format: 'human' (default) for readable output, 'structured' for machine-oriented components with integer indices"},
+        {"enum", json::array({"human", "structured"})},
+        {"default", "human"},
+    };
+
     server.register_tool(
         {"christoffel", "Compute Christoffel symbols from a metric tensor", {
             {"type", "object"},
@@ -467,13 +475,15 @@ void register_all_tools(Server& server) {
                     {"description", "Metric tensor as 2D array of expressions"}}},
                 {"coordinates", {{"type", "array"}, {"items", {{"type", "string"}}},
                     {"description", "Coordinate names, e.g. ['t','r','theta','phi']"}}},
+                {"result_format", result_format_prop},
             }},
             {"required", json::array({"metric", "coordinates"})},
         }},
         [](const json& args) -> json {
             auto metric = args.at("metric").get<std::vector<std::vector<std::string>>>();
             auto coords = args.at("coordinates").get<std::vector<std::string>>();
-            return physics::christoffel(metric, coords);
+            auto fmt = args.value("result_format", "human");
+            return physics::christoffel(metric, coords, fmt);
         }
     );
 
@@ -486,13 +496,15 @@ void register_all_tools(Server& server) {
                     {"description", "Metric tensor as 2D array of expressions"}}},
                 {"coordinates", {{"type", "array"}, {"items", {{"type", "string"}}},
                     {"description", "Coordinate names"}}},
+                {"result_format", result_format_prop},
             }},
             {"required", json::array({"metric", "coordinates"})},
         }},
         [](const json& args) -> json {
             auto metric = args.at("metric").get<std::vector<std::vector<std::string>>>();
             auto coords = args.at("coordinates").get<std::vector<std::string>>();
-            return physics::riemann_tensor(metric, coords);
+            auto fmt = args.value("result_format", "human");
+            return physics::riemann_tensor(metric, coords, fmt);
         }
     );
 
@@ -505,13 +517,15 @@ void register_all_tools(Server& server) {
                     {"description", "Metric tensor as 2D array"}}},
                 {"coordinates", {{"type", "array"}, {"items", {{"type", "string"}}},
                     {"description", "Coordinate names"}}},
+                {"result_format", result_format_prop},
             }},
             {"required", json::array({"metric", "coordinates"})},
         }},
         [](const json& args) -> json {
             auto metric = args.at("metric").get<std::vector<std::vector<std::string>>>();
             auto coords = args.at("coordinates").get<std::vector<std::string>>();
-            return physics::ricci_tensor(metric, coords);
+            auto fmt = args.value("result_format", "human");
+            return physics::ricci_tensor(metric, coords, fmt);
         }
     );
 
@@ -543,13 +557,15 @@ void register_all_tools(Server& server) {
                     {"description", "Metric tensor as 2D array"}}},
                 {"coordinates", {{"type", "array"}, {"items", {{"type", "string"}}},
                     {"description", "Coordinate names"}}},
+                {"result_format", result_format_prop},
             }},
             {"required", json::array({"metric", "coordinates"})},
         }},
         [](const json& args) -> json {
             auto metric = args.at("metric").get<std::vector<std::vector<std::string>>>();
             auto coords = args.at("coordinates").get<std::vector<std::string>>();
-            return physics::einstein_tensor(metric, coords);
+            auto fmt = args.value("result_format", "human");
+            return physics::einstein_tensor(metric, coords, fmt);
         }
     );
 

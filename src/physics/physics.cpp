@@ -92,12 +92,54 @@ static std::string format_tensor_latex(const json& components) {
     return result;
 }
 
+static bool is_structured(const std::string& fmt) {
+    return fmt == "structured";
+}
+
+// Build the structured metadata envelope shared by all tensor tools.
+static json structured_envelope(const std::string& type, int rank,
+                                 const std::vector<std::string>& coords,
+                                 const json& components, bool is_zero) {
+    return {
+        {"type", type},
+        {"result_format", "structured"},
+        {"rank", rank},
+        {"dimensions", static_cast<int>(coords.size())},
+        {"coordinates", coords},
+        {"zero", is_zero},
+        {"components", components},
+    };
+}
+
 // --- Public API ---
 
 json christoffel(const std::vector<std::vector<std::string>>& metric,
-                 const std::vector<std::string>& coords) {
+                 const std::vector<std::string>& coords,
+                 const std::string& result_format) {
     auto m = parse_metric(metric, coords);
     auto gamma = compute_christoffel_array(m);
+
+    if (is_structured(result_format)) {
+        // Emit full component set (both mu,nu and nu,mu for symmetric lower indices)
+        json comps = json::array();
+        for (int sigma = 0; sigma < m.n; ++sigma) {
+            for (int mu = 0; mu < m.n; ++mu) {
+                for (int nu = 0; nu < m.n; ++nu) {
+                    auto val = gamma[sigma][mu][nu];
+                    if (!eq(*val, *zero)) {
+                        comps.push_back({
+                            {"indices", {sigma, mu, nu}},
+                            {"index_names", {coords[sigma], coords[mu], coords[nu]}},
+                            {"variance", "udd"},
+                            {"value", val->__str__()},
+                            {"latex", latex(*val)},
+                        });
+                    }
+                }
+            }
+        }
+        return structured_envelope("christoffel_symbols", 3, coords, comps, comps.empty());
+    }
 
     json components = json::object();
     for (int sigma = 0; sigma < m.n; ++sigma) {
@@ -132,10 +174,35 @@ json christoffel(const std::vector<std::vector<std::string>>& metric,
 }
 
 json riemann_tensor(const std::vector<std::vector<std::string>>& metric,
-                    const std::vector<std::string>& coords) {
+                    const std::vector<std::string>& coords,
+                    const std::string& result_format) {
     auto m = parse_metric(metric, coords);
     auto gamma = compute_christoffel_array(m);
     auto riemann = compute_riemann_array(gamma, m.coords, m.n);
+
+    if (is_structured(result_format)) {
+        // Emit full component set (all index combinations, not symmetry-reduced)
+        json comps = json::array();
+        for (int rho = 0; rho < m.n; ++rho) {
+            for (int sigma = 0; sigma < m.n; ++sigma) {
+                for (int mu = 0; mu < m.n; ++mu) {
+                    for (int nu = 0; nu < m.n; ++nu) {
+                        auto val = riemann[rho][sigma][mu][nu];
+                        if (!eq(*val, *zero)) {
+                            comps.push_back({
+                                {"indices", {rho, sigma, mu, nu}},
+                                {"index_names", {coords[rho], coords[sigma], coords[mu], coords[nu]}},
+                                {"variance", "uddd"},
+                                {"value", val->__str__()},
+                                {"latex", latex(*val)},
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        return structured_envelope("riemann_tensor", 4, coords, comps, comps.empty());
+    }
 
     json components = json::object();
     for (int rho = 0; rho < m.n; ++rho) {
@@ -172,18 +239,20 @@ json riemann_tensor(const std::vector<std::vector<std::string>>& metric,
 }
 
 json ricci_tensor(const std::vector<std::vector<std::string>>& metric,
-                  const std::vector<std::string>& coords) {
+                  const std::vector<std::string>& coords,
+                  const std::string& result_format) {
     auto m = parse_metric(metric, coords);
     auto gamma = compute_christoffel_array(m);
     auto riemann = compute_riemann_array(gamma, m.coords, m.n);
 
-    json components = json::object();
-    // Ricci matrix for output
+    // Compute Ricci components into a matrix for both paths
     std::vector<std::vector<std::string>> ricci_matrix(m.n,
         std::vector<std::string>(m.n, "0"));
+    std::vector<std::vector<RCP<const Basic>>> ricci_vals(m.n,
+        std::vector<RCP<const Basic>>(m.n, zero));
 
     for (int mu = 0; mu < m.n; ++mu) {
-        for (int nu = mu; nu < m.n; ++nu) {  // symmetric
+        for (int nu = mu; nu < m.n; ++nu) {
             RCP<const Basic> val = zero;
             for (int rho = 0; rho < m.n; ++rho) {
                 val = add(val, riemann[rho][mu][rho][nu]);
@@ -191,6 +260,37 @@ json ricci_tensor(const std::vector<std::vector<std::string>>& metric,
             val = expand(val);
             ricci_matrix[mu][nu] = val->__str__();
             ricci_matrix[nu][mu] = val->__str__();
+            ricci_vals[mu][nu] = val;
+            ricci_vals[nu][mu] = val;
+        }
+    }
+
+    if (is_structured(result_format)) {
+        // Emit full component set (both mu,nu and nu,mu for symmetric tensor)
+        json comps = json::array();
+        for (int mu = 0; mu < m.n; ++mu) {
+            for (int nu = 0; nu < m.n; ++nu) {
+                auto val = ricci_vals[mu][nu];
+                if (!eq(*val, *zero)) {
+                    comps.push_back({
+                        {"indices", {mu, nu}},
+                        {"index_names", {coords[mu], coords[nu]}},
+                        {"variance", "dd"},
+                        {"value", val->__str__()},
+                        {"latex", latex(*val)},
+                    });
+                }
+            }
+        }
+        json out = structured_envelope("ricci_tensor", 2, coords, comps, comps.empty());
+        out["dense_matrix"] = ricci_matrix;
+        return out;
+    }
+
+    json components = json::object();
+    for (int mu = 0; mu < m.n; ++mu) {
+        for (int nu = mu; nu < m.n; ++nu) {
+            auto val = ricci_vals[mu][nu];
             if (!eq(*val, *zero)) {
                 std::string key = "R_{" + coords[mu] + coords[nu] + "}";
                 components[key] = {
@@ -254,7 +354,8 @@ json ricci_scalar(const std::vector<std::vector<std::string>>& metric,
 }
 
 json einstein_tensor(const std::vector<std::vector<std::string>>& metric,
-                     const std::vector<std::string>& coords) {
+                     const std::vector<std::string>& coords,
+                     const std::string& result_format) {
     auto m = parse_metric(metric, coords);
     auto gamma = compute_christoffel_array(m);
     auto riemann = compute_riemann_array(gamma, m.coords, m.n);
@@ -281,9 +382,10 @@ json einstein_tensor(const std::vector<std::vector<std::string>>& metric,
     scalar = expand(scalar);
 
     // G_{mu nu} = R_{mu nu} - 1/2 R g_{mu nu}
-    json components = json::object();
     std::vector<std::vector<std::string>> einstein_matrix(m.n,
         std::vector<std::string>(m.n, "0"));
+    std::vector<std::vector<RCP<const Basic>>> einstein_vals(m.n,
+        std::vector<RCP<const Basic>>(m.n, zero));
 
     for (int mu = 0; mu < m.n; ++mu) {
         for (int nu = mu; nu < m.n; ++nu) {
@@ -292,6 +394,37 @@ json einstein_tensor(const std::vector<std::vector<std::string>>& metric,
                                        mul(scalar, m.g.get(mu, nu)))));
             einstein_matrix[mu][nu] = val->__str__();
             einstein_matrix[nu][mu] = val->__str__();
+            einstein_vals[mu][nu] = val;
+            einstein_vals[nu][mu] = val;
+        }
+    }
+
+    if (is_structured(result_format)) {
+        // Emit full component set (both mu,nu and nu,mu for symmetric tensor)
+        json comps = json::array();
+        for (int mu = 0; mu < m.n; ++mu) {
+            for (int nu = 0; nu < m.n; ++nu) {
+                auto val = einstein_vals[mu][nu];
+                if (!eq(*val, *zero)) {
+                    comps.push_back({
+                        {"indices", {mu, nu}},
+                        {"index_names", {coords[mu], coords[nu]}},
+                        {"variance", "dd"},
+                        {"value", val->__str__()},
+                        {"latex", latex(*val)},
+                    });
+                }
+            }
+        }
+        json out = structured_envelope("einstein_tensor", 2, coords, comps, comps.empty());
+        out["dense_matrix"] = einstein_matrix;
+        return out;
+    }
+
+    json components = json::object();
+    for (int mu = 0; mu < m.n; ++mu) {
+        for (int nu = mu; nu < m.n; ++nu) {
+            auto val = einstein_vals[mu][nu];
             if (!eq(*val, *zero)) {
                 std::string key = "G_{" + coords[mu] + coords[nu] + "}";
                 components[key] = {
