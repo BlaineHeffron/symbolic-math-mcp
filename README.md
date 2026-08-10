@@ -12,6 +12,10 @@ An [MCP](https://modelcontextprotocol.io/) server that gives LLMs access to symb
 
 Both LaTeX and SymPy syntax are accepted as input. All results include LaTeX-rendered output.
 
+The stdio server supports MCP `2026-07-28`'s stateless `server/discover` lifecycle and
+legacy initialize-based clients. Its deterministic tool catalog advertises a five-minute
+public cache lifetime to modern clients.
+
 ## Quick Start
 
 ```bash

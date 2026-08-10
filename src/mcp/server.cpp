@@ -9,6 +9,7 @@
 #include "tensors/tensors.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -16,6 +17,12 @@
 namespace mcp {
 
 namespace {
+
+constexpr const char* STATELESS_PROTOCOL_VERSION = "2026-07-28";
+constexpr const char* PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion";
+constexpr const char* CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities";
+constexpr const char* SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo";
+constexpr std::uint64_t LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 
 struct DecodedMessage {
     json payload;
@@ -115,15 +122,37 @@ void Server::run(std::istream& in, std::ostream& out) {
 json Server::handle_request(const json& request) {
     try {
         auto req = parse_request(request);
+        const bool claims_stateless = req.params.is_object()
+            && req.params.contains("_meta")
+            && req.params["_meta"].is_object()
+            && req.params["_meta"].value(PROTOCOL_VERSION_META_KEY, "") == STATELESS_PROTOCOL_VERSION;
+        const bool stateless = req.method == "server/discover" || claims_stateless;
 
-        if (req.method == "initialize") {
+        if (stateless) {
+            const auto meta = req.params.value("_meta", json::object());
+            if (!meta.is_object()
+                || meta.value(PROTOCOL_VERSION_META_KEY, "") != STATELESS_PROTOCOL_VERSION
+                || !meta.contains(CLIENT_CAPABILITIES_META_KEY)
+                || !meta[CLIENT_CAPABILITIES_META_KEY].is_object()) {
+                return make_error(req.id, INVALID_PARAMS,
+                                  "stateless requests require protocolVersion and clientCapabilities in params._meta");
+            }
+        }
+
+        if (req.method == "server/discover") {
+            return handle_discover(req.id);
+        } else if (req.method == "initialize" && !stateless) {
             return handle_initialize(req.id, req.params);
         } else if (req.method == "notifications/initialized") {
+            if (stateless) {
+                return make_error(req.id, METHOD_NOT_FOUND,
+                                  "Method not found: notifications/initialized");
+            }
             return handle_initialized(req.id);
         } else if (req.method == "tools/list") {
-            return handle_tools_list(req.id, req.params);
+            return handle_tools_list(req.id, req.params, stateless);
         } else if (req.method == "tools/call") {
-            return handle_tools_call(req.id, req.params);
+            return handle_tools_call(req.id, req.params, stateless);
         } else {
             return make_error(req.id, METHOD_NOT_FOUND,
                               "Method not found: " + req.method);
@@ -139,7 +168,7 @@ json Server::handle_initialize(const json& id, const json& params) {
         {"tools", json::object()},
     };
     json result = {
-        {"protocolVersion", "2024-11-05"},
+        {"protocolVersion", params.value("protocolVersion", "2025-11-25")},
         {"capabilities", capabilities},
         {"serverInfo", {
             {"name", name_},
@@ -149,12 +178,23 @@ json Server::handle_initialize(const json& id, const json& params) {
     return make_response(id, result);
 }
 
+json Server::handle_discover(const json& id) {
+    json capabilities = {
+        {"tools", json::object()},
+    };
+    return complete_result(id, {
+        {"supportedVersions", json::array({STATELESS_PROTOCOL_VERSION})},
+        {"capabilities", capabilities},
+        {"instructions", "Symbolic mathematics and theoretical physics tools. Results include machine-readable JSON encoded as text."},
+    }, true);
+}
+
 json Server::handle_initialized(const json& id) {
     (void)id;
     return json();
 }
 
-json Server::handle_tools_list(const json& id, const json& params) {
+json Server::handle_tools_list(const json& id, const json& params, bool stateless) {
     json tool_list = json::array();
     for (const auto& tool : tools_) {
         tool_list.push_back({
@@ -163,10 +203,13 @@ json Server::handle_tools_list(const json& id, const json& params) {
             {"inputSchema", tool.input_schema},
         });
     }
+    if (stateless) {
+        return complete_result(id, {{"tools", tool_list}}, true);
+    }
     return make_response(id, {{"tools", tool_list}});
 }
 
-json Server::handle_tools_call(const json& id, const json& params) {
+json Server::handle_tools_call(const json& id, const json& params, bool stateless) {
     if (!params.contains("name") || !params["name"].is_string()) {
         return make_error(id, INVALID_PARAMS, "Missing 'name' parameter");
     }
@@ -186,7 +229,9 @@ json Server::handle_tools_call(const json& id, const json& params) {
             {"type", "text"},
             {"text", result.dump(2)},
         });
-        return make_response(id, {{"content", content}});
+        json call_result = {{"content", content}};
+        return stateless ? complete_result(id, std::move(call_result), false)
+                         : make_response(id, call_result);
     } catch (std::exception& e) {
         json error_result = {
             {"error", e.what()},
@@ -197,8 +242,23 @@ json Server::handle_tools_call(const json& id, const json& params) {
             {"type", "text"},
             {"text", error_result.dump(2)},
         });
-        return make_response(id, {{"content", content}, {"isError", true}});
+        json result = {{"content", content}, {"isError", true}};
+        return stateless ? complete_result(id, std::move(result), false)
+                         : make_response(id, result);
     }
+}
+
+json Server::complete_result(const json& id, json result, bool cacheable) const {
+    result["resultType"] = "complete";
+    if (cacheable) {
+        result["ttlMs"] = LIST_CACHE_TTL_MS;
+        result["cacheScope"] = "public";
+    }
+    result["_meta"][SERVER_INFO_META_KEY] = {
+        {"name", name_},
+        {"version", version_},
+    };
+    return make_response(id, result);
 }
 
 // --- Tool Registration ---

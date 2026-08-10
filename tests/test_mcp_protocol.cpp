@@ -60,6 +60,41 @@ TEST_F(McpServerTest, ToolsList) {
     EXPECT_EQ(tools.size(), 21u);
 }
 
+TEST_F(McpServerTest, StatelessDiscoveryAndToolsList) {
+    const json meta = {
+        {"io.modelcontextprotocol/protocolVersion", "2026-07-28"},
+        {"io.modelcontextprotocol/clientCapabilities", json::object()},
+        {"io.modelcontextprotocol/clientInfo", {{"name", "test"}, {"version", "1.0"}}},
+    };
+    auto discovery = server.handle_request({
+        {"jsonrpc", "2.0"},
+        {"id", "discover"},
+        {"method", "server/discover"},
+        {"params", {{"_meta", meta}}},
+    });
+    EXPECT_EQ(discovery["result"]["supportedVersions"], json::array({"2026-07-28"}));
+    EXPECT_EQ(discovery["result"]["resultType"], "complete");
+    EXPECT_EQ(discovery["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "symbolic-math");
+
+    auto tools = server.handle_request({
+        {"jsonrpc", "2.0"},
+        {"id", "tools"},
+        {"method", "tools/list"},
+        {"params", {{"_meta", meta}}},
+    });
+    EXPECT_EQ(tools["result"]["tools"].size(), 21u);
+    EXPECT_EQ(tools["result"]["ttlMs"], 300000);
+    EXPECT_EQ(tools["result"]["cacheScope"], "public");
+
+    auto removed_initialize = server.handle_request({
+        {"jsonrpc", "2.0"},
+        {"id", "initialize"},
+        {"method", "initialize"},
+        {"params", {{"_meta", meta}}},
+    });
+    EXPECT_EQ(removed_initialize["error"]["code"], -32601);
+}
+
 TEST_F(McpServerTest, FramedRunInitializeAndToolsList) {
     auto frame = [](const json& message) {
         std::string body = message.dump();

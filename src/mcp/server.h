@@ -31,8 +31,10 @@ public:
 private:
     json handle_initialize(const json& id, const json& params);
     json handle_initialized(const json& id);
-    json handle_tools_list(const json& id, const json& params);
-    json handle_tools_call(const json& id, const json& params);
+    json handle_discover(const json& id);
+    json handle_tools_list(const json& id, const json& params, bool stateless);
+    json handle_tools_call(const json& id, const json& params, bool stateless);
+    json complete_result(const json& id, json result, bool cacheable) const;
 
     std::string name_;
     std::string version_;
